@@ -1,5 +1,3 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:hyphenator_impure/hyphenator.dart';
@@ -134,54 +132,125 @@ class AutoHyphenatingText extends StatelessWidget {
     }
 
     return LayoutBuilder(
-        builder: (BuildContext context, BoxConstraints constraints) {
-      List<String> words = text.split(" ");
-      List<InlineSpan> texts = <InlineSpan>[];
+      builder: (BuildContext context, BoxConstraints constraints) {
+        List<String> words = [];
+        List<String> userLines = text.split('\n');
+        List<int> newlineIdx = [];
 
-      assert(globalLoader != null,
-          "AutoHyphenatingText not initialized! Remember to call initHyphenation().");
-      final Hyphenator hyphenator = Hyphenator(
-        resource: loader ?? globalLoader!,
-        hyphenateSymbol: '_',
-      );
+        for (var line in userLines) {
+          List<String> lineWords = line.split(' ');
+          if (lineWords.isNotEmpty) {
+            newlineIdx.add(words.length + lineWords.length - 1);
+          }
+          words.addAll(lineWords);
+        }
 
-      double singleSpaceWidth =
-          getTextWidth(" ", effectiveTextStyle, textDirection, textScaleFactor);
-      double currentLineSpaceUsed = 0;
-      int lines = 0;
+        if (newlineIdx.isNotEmpty) {
+          newlineIdx.removeLast();
+        }
 
-      double endBuffer = style?.overflow == TextOverflow.ellipsis
-          ? getTextWidth("…", style, textDirection, textScaleFactor)
-          : 0;
+        List<InlineSpan> texts = <InlineSpan>[];
 
-      for (int i = 0; i < words.length; i++) {
-        double wordWidth = getTextWidth(
-            words[i], effectiveTextStyle, textDirection, textScaleFactor);
+        assert(globalLoader != null,
+            "AutoHyphenatingText not initialized! Remember to call initHyphenation().");
+        final Hyphenator hyphenator = Hyphenator(
+          resource: loader ?? globalLoader!,
+          hyphenateSymbol: '_',
+        );
 
-        if (currentLineSpaceUsed + wordWidth <
-            constraints.maxWidth - endBuffer) {
-          texts.add(TextSpan(text: words[i]));
-          currentLineSpaceUsed += wordWidth;
-        } else {
-          final List<String> syllables = words[i].length == 1
-              ? <String>[words[i]]
-              : hyphenator.hyphenateWordToList(words[i]);
-          final int? syllableToUse = words[i].length == 1
-              ? null
-              : getLastSyllableIndex(
-                  syllables,
-                  constraints.maxWidth - currentLineSpaceUsed,
-                  effectiveTextStyle);
+        double singleSpaceWidth = getTextWidth(
+            " ", effectiveTextStyle, textDirection, textScaleFactor);
+        double currentLineSpaceUsed = 0;
+        int lines = 0;
 
-          if (syllableToUse == null ||
-              (shouldHyphenate != null &&
-                  !shouldHyphenate!(
-                      constraints.maxWidth, currentLineSpaceUsed, wordWidth))) {
-            if (currentLineSpaceUsed == 0) {
-              texts.add(TextSpan(text: words[i]));
-              currentLineSpaceUsed += wordWidth;
+        double endBuffer = style?.overflow == TextOverflow.ellipsis
+            ? getTextWidth("…", style, textDirection, textScaleFactor)
+            : 0;
+
+        for (int i = 0; i < words.length; i++) {
+          double wordWidth = getTextWidth(
+              words[i], effectiveTextStyle, textDirection, textScaleFactor);
+
+          void insertforcedNewLine() {
+            if (newlineIdx.contains(i)) {
+              texts.add(const TextSpan(text: "\n"));
+              lines++;
+              currentLineSpaceUsed = 0;
+              newlineIdx.remove(i);
+            }
+          }
+
+          if (currentLineSpaceUsed + wordWidth <
+              constraints.maxWidth - endBuffer) {
+            texts.add(TextSpan(text: words[i]));
+            currentLineSpaceUsed += wordWidth;
+
+            insertforcedNewLine();
+          } else {
+            final List<String> syllables = words[i].length == 1
+                ? <String>[words[i]]
+                : hyphenator.hyphenateWordToList(words[i]);
+            final int? syllableToUse = words[i].length == 1
+                ? null
+                : getLastSyllableIndex(
+                    syllables,
+                    constraints.maxWidth - currentLineSpaceUsed,
+                    effectiveTextStyle);
+
+            if (syllableToUse == null ||
+                (shouldHyphenate != null &&
+                    !shouldHyphenate!(constraints.maxWidth,
+                        currentLineSpaceUsed, wordWidth))) {
+              if (currentLineSpaceUsed == 0) {
+                texts.add(TextSpan(text: words[i]));
+                currentLineSpaceUsed += wordWidth;
+                insertforcedNewLine();
+              } else {
+                i--;
+                if (texts.last == const TextSpan(text: " ")) {
+                  texts.removeLast();
+                }
+                currentLineSpaceUsed = 0;
+                lines++;
+                if (effectiveMaxLines() != null &&
+                    lines >= effectiveMaxLines()!) {
+                  if (overflow == TextOverflow.ellipsis) {
+                    texts.add(const TextSpan(text: "…"));
+                  }
+                  break;
+                }
+                texts.add(const TextSpan(text: "\n"));
+              }
+              continue;
             } else {
-              i--;
+              texts.add(TextSpan(
+                  text: mergeSyllablesFront(syllables, syllableToUse)));
+              words.insert(i + 1, mergeSyllablesBack(syllables, syllableToUse));
+              newlineIdx = newlineIdx.map((e) => e += 1).toList();
+              insertforcedNewLine();
+
+              currentLineSpaceUsed = 0;
+              lines++;
+              if (effectiveMaxLines() != null &&
+                  lines >= effectiveMaxLines()!) {
+                if (overflow == TextOverflow.ellipsis) {
+                  texts.add(const TextSpan(text: "…"));
+                }
+                break;
+              }
+              texts.add(const TextSpan(text: "\n"));
+              continue;
+            }
+          }
+
+          if (i != words.length - 1) {
+            if (currentLineSpaceUsed + singleSpaceWidth <
+                constraints.maxWidth) {
+              if (texts.last != const TextSpan(text: "\n")) {
+                texts.add(const TextSpan(text: " "));
+              }
+              currentLineSpaceUsed += singleSpaceWidth;
+            } else {
               if (texts.last == const TextSpan(text: " ")) {
                 texts.removeLast();
               }
@@ -196,77 +265,43 @@ class AutoHyphenatingText extends StatelessWidget {
               }
               texts.add(const TextSpan(text: "\n"));
             }
-            continue;
-          } else {
-            texts.add(
-                TextSpan(text: mergeSyllablesFront(syllables, syllableToUse)));
-            words.insert(i + 1, mergeSyllablesBack(syllables, syllableToUse));
-            currentLineSpaceUsed = 0;
-            lines++;
-            if (effectiveMaxLines() != null && lines >= effectiveMaxLines()!) {
-              if (overflow == TextOverflow.ellipsis) {
-                texts.add(const TextSpan(text: "…"));
-              }
-              break;
-            }
-            texts.add(const TextSpan(text: "\n"));
-            continue;
           }
         }
 
-        if (i != words.length - 1) {
-          if (currentLineSpaceUsed + singleSpaceWidth < constraints.maxWidth) {
-            texts.add(const TextSpan(text: " "));
-            currentLineSpaceUsed += singleSpaceWidth;
-          } else {
-            if (texts.last == const TextSpan(text: " ")) {
-              texts.removeLast();
-            }
-            currentLineSpaceUsed = 0;
-            lines++;
-            if (effectiveMaxLines() != null && lines >= effectiveMaxLines()!) {
-              if (overflow == TextOverflow.ellipsis) {
-                texts.add(const TextSpan(text: "…"));
-              }
-              break;
-            }
-            texts.add(const TextSpan(text: "\n"));
-          }
-        }
-      }
-
-      final SelectionRegistrar? registrar = SelectionContainer.maybeOf(context);
-      Widget richText = RichText(
-        textDirection: textDirection,
-        strutStyle: strutStyle,
-        locale: locale,
-        softWrap: softWrap ?? true,
-        overflow: overflow ?? TextOverflow.clip,
-        textScaleFactor:
-            textScaleFactor ?? MediaQuery.of(context).textScaleFactor,
-        textWidthBasis: textWidthBasis ?? TextWidthBasis.parent,
-        selectionColor: selectionColor,
-        textAlign: textAlign ?? TextAlign.start,
-        selectionRegistrar: registrar,
-        text: TextSpan(
-          style: effectiveTextStyle,
-          children: texts,
-        ),
-      );
-
-      if (registrar != null) {
-        richText = MouseRegion(
-          cursor: SystemMouseCursors.text,
-          child: richText,
+        final SelectionRegistrar? registrar =
+            SelectionContainer.maybeOf(context);
+        Widget richText = RichText(
+          textDirection: textDirection,
+          strutStyle: strutStyle,
+          locale: locale,
+          softWrap: softWrap ?? true,
+          overflow: overflow ?? TextOverflow.clip,
+          textScaleFactor:
+              textScaleFactor ?? MediaQuery.of(context).textScaleFactor,
+          textWidthBasis: textWidthBasis ?? TextWidthBasis.parent,
+          selectionColor: selectionColor,
+          textAlign: textAlign ?? TextAlign.start,
+          selectionRegistrar: registrar,
+          text: TextSpan(
+            style: effectiveTextStyle,
+            children: texts,
+          ),
         );
-      }
-      return Semantics(
-        textDirection: textDirection,
-        label: semanticsLabel ?? text,
-        child: ExcludeSemantics(
-          child: richText,
-        ),
-      );
-    });
+
+        if (registrar != null) {
+          richText = MouseRegion(
+            cursor: SystemMouseCursors.text,
+            child: richText,
+          );
+        }
+        return Semantics(
+          textDirection: textDirection,
+          label: semanticsLabel ?? text,
+          child: ExcludeSemantics(
+            child: richText,
+          ),
+        );
+      },
+    );
   }
 }
